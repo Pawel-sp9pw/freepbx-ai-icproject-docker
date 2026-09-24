@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+wireguard/wg_confs/*.conf
+!wireguard/wg_confs/.gitkeep
+.DS_Store
