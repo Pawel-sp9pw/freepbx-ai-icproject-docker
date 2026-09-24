@@ -1,0 +1,124 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    networks: [ai-net]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks: [ai-net]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+    entrypoint: ["/bin/sh","-c"]
+    command: ['ollama pull "$$OLLAMA_MODEL"']
+    restart: "no"
+
+  piper:
+    build:
+      context: ./docker/piper
+    restart: unless-stopped
+    environment:
+      PIPER_VOICE: ${PIPER_VOICE:-pl_PL-mc_speech-medium}
+    networks: [ai-net]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/info >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  agent:
+    profiles: ["direct"]
+    build: .
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+      piper:
+        condition: service_healthy
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-now}
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      PIPER_URL: http://piper:5000
+      PIPER_VOICE: ${PIPER_VOICE:-pl_PL-mc_speech-medium}
+      AUDIOSOCKET_PORT: ${AUDIOSOCKET_PORT:-9019}
+      MAX_TURNS: ${MAX_TURNS:-8}
+      SILENCE_MS: ${SILENCE_MS:-900}
+    ports:
+      - "${WEB_PORT:-8080}:8000"
+      - "${AUDIOSOCKET_PORT:-9019}:${AUDIOSOCKET_PORT:-9019}"
+    volumes:
+      - agent-data:/data
+      - whisper-cache:/models/huggingface
+    networks: [ai-net]
+
+  wireguard:
+    profiles: ["wireguard"]
+    image: lscr.io/linuxserver/wireguard:latest
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-Europe/Warsaw}
+    volumes:
+      - ./wireguard:/config
+      - /lib/modules:/lib/modules:ro
+    ports:
+      - "${WEB_PORT:-8080}:8000"
+      - "${AUDIOSOCKET_PORT:-9019}:${AUDIOSOCKET_PORT:-9019}"
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: "1"
+    networks: [ai-net]
+
+  agent-wg:
+    profiles: ["wireguard"]
+    build: .
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+      piper:
+        condition: service_healthy
+      wireguard:
+        condition: service_started
+    network_mode: "service:wireguard"
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-now}
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      PIPER_URL: http://piper:5000
+      PIPER_VOICE: ${PIPER_VOICE:-pl_PL-mc_speech-medium}
+      AUDIOSOCKET_PORT: ${AUDIOSOCKET_PORT:-9019}
+      MAX_TURNS: ${MAX_TURNS:-8}
+      SILENCE_MS: ${SILENCE_MS:-900}
+    volumes:
+      - agent-data:/data
+      - whisper-cache:/models/huggingface
+
+networks:
+  ai-net:
+
+volumes:
+  ollama-data:
+  agent-data:
+  whisper-cache:
